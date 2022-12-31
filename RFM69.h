@@ -175,7 +175,7 @@
 //It was determined to be buggy and unreliable, see https://lowpowerlab.com/forum/low-power-techniques/ultra-low-power-listening-mode-for-battery-nodes/msg20261/#msg20261
 //uncomment to try ListenMode, adds ~1K to compiled size
 //FYI - 10bit addressing is not supported in ListenMode
-//#define RF69_LISTENMODE_ENABLE
+#define RF69_LISTENMODE_ENABLE
 
 #if defined(RF69_LISTENMODE_ENABLE)
   // By default, receive for 256uS in listen mode and idle for ~1s
