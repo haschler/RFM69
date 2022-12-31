@@ -1,45 +1,75 @@
 // Sample RFM69 sender/node sketch, with ACK and optional encryption, and Automatic Transmission Control
 // Sends periodic messages of increasing length to gateway (id=1)
 // It also looks for an onboard FLASH chip, if present
-// RFM69 library and sample code by Felix Rusu - http://LowPowerLab.com/contact
-// Copyright Felix Rusu (2015)
-
-#include <RFM69.h>    //get it here: https://www.github.com/lowpowerlab/rfm69
-#include <RFM69_ATC.h>//get it here: https://www.github.com/lowpowerlab/rfm69
-#include <SPI.h>
-#include <SPIFlash.h> //get it here: https://www.github.com/lowpowerlab/spiflash
+// **********************************************************************************
+// Copyright Felix Rusu 2018, http://www.LowPowerLab.com/contact
+// **********************************************************************************
+// License
+// **********************************************************************************
+// This program is free software; you can redistribute it 
+// and/or modify it under the terms of the GNU General    
+// Public License as published by the Free Software       
+// Foundation; either version 3 of the License, or        
+// (at your option) any later version.                    
+//                                                        
+// This program is distributed in the hope that it will   
+// be useful, but WITHOUT ANY WARRANTY; without even the  
+// implied warranty of MERCHANTABILITY or FITNESS FOR A   
+// PARTICULAR PURPOSE. See the GNU General Public        
+// License for more details.                              
+//                                                        
+// Licence can be viewed at                               
+// http://www.gnu.org/licenses/gpl-3.0.txt
+//
+// Please maintain this license information along with authorship
+// and copyright notices in any redistribution of this code
+// **********************************************************************************
+#include <RFM69.h>         //get it here: https://www.github.com/lowpowerlab/rfm69
+#include <RFM69_ATC.h>     //get it here: https://www.github.com/lowpowerlab/rfm69
+#include <SPIFlash.h>      //get it here: https://www.github.com/lowpowerlab/spiflash
 
 //*********************************************************************************************
-//************ IMPORTANT SETTINGS - YOU MUST CHANGE/CONFIGURE TO FIT YOUR HARDWARE *************
+//************ IMPORTANT SETTINGS - YOU MUST CHANGE/CONFIGURE TO FIT YOUR HARDWARE ************
 //*********************************************************************************************
-#define NODEID        2    //must be unique for each node on same network (range up to 254, 255 is used for broadcast)
-#define NETWORKID     100  //the same on all nodes that talk to each other (range up to 255)
-#define GATEWAYID     1
-//Match frequency to the hardware version of the radio on your Moteino (uncomment one):
-#define FREQUENCY   RF69_433MHZ
+// Address IDs are 10bit, meaning usable ID range is 1..1023
+// Address 0 is special (broadcast), messages to address 0 are received by all *listening* nodes (ie. active RX mode)
+// Gateway ID should be kept at ID=1 for simplicity, although this is not a hard constraint
+//*********************************************************************************************
+#define NODEID        2    // keep UNIQUE for each node on same network
+#define NETWORKID     100  // keep IDENTICAL on all nodes that talk to each other
+#define GATEWAYID     1    // "central" node
+
+//*********************************************************************************************
+// Frequency should be set to match the radio module hardware tuned frequency,
+// otherwise if say a "433mhz" module is set to work at 915, it will work but very badly.
+// Moteinos and RF modules from LowPowerLab are marked with a colored dot to help identify their tuned frequency band,
+// see this link for details: https://lowpowerlab.com/guide/moteino/transceivers/
+// The below examples are predefined "center" frequencies for the radio's tuned "ISM frequency band".
+// You can always set the frequency anywhere in the "frequency band", ex. the 915mhz ISM band is 902..928mhz.
+//*********************************************************************************************
+//#define FREQUENCY   RF69_433MHZ
 //#define FREQUENCY   RF69_868MHZ
-//#define FREQUENCY     RF69_915MHZ
+#define FREQUENCY     RF69_915MHZ
+//#define FREQUENCY_EXACT 916000000 // you may define an exact frequency/channel in Hz
 #define ENCRYPTKEY    "sampleEncryptKey" //exactly the same 16 characters/bytes on all nodes!
-//#define IS_RFM69HW    //uncomment only for RFM69HW! Leave out if you have RFM69W!
-#define ENABLE_ATC    //comment out this line to disable AUTO TRANSMISSION CONTROL
+#define IS_RFM69HW_HCW  //uncomment only for RFM69HW/HCW! Leave out if you have RFM69W/CW!
 //*********************************************************************************************
-
-#ifdef __AVR_ATmega1284P__
-  #define LED           15 // Moteino MEGAs have LEDs on D15
-  #define FLASH_SS      23 // and FLASH SS on D23
-#else
-  #define LED           9 // Moteinos have LEDs on D9
-  #define FLASH_SS      8 // and FLASH SS on D8
-#endif
-
+//Auto Transmission Control - dials down transmit power to save battery
+//Usually you do not need to always transmit at max output power
+//By reducing TX power even a little you save a significant amount of battery power
+//This setting enables this gateway to work with remote nodes that have ATC enabled to
+//dial their power down to only the required level (ATC_RSSI)
+#define ENABLE_ATC    //comment out this line to disable AUTO TRANSMISSION CONTROL
+#define ATC_RSSI      -80
+//*********************************************************************************************
 #define SERIAL_BAUD   115200
 
-int TRANSMITPERIOD = 150; //transmit a packet to gateway so often (in ms)
+int TRANSMITPERIOD = 200; //transmit a packet to gateway so often (in ms)
 char payload[] = "123 ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 char buff[20];
 byte sendSize=0;
 boolean requestACK = false;
-SPIFlash flash(FLASH_SS, 0xEF30); //EF30 for 4mbit  Windbond chip (W25X40CL)
+SPIFlash flash(SS_FLASHMEM, 0xEF30); //EF30 for 4mbit  Windbond chip (W25X40CL)
 
 #ifdef ENABLE_ATC
   RFM69_ATC radio;
@@ -50,18 +80,24 @@ SPIFlash flash(FLASH_SS, 0xEF30); //EF30 for 4mbit  Windbond chip (W25X40CL)
 void setup() {
   Serial.begin(SERIAL_BAUD);
   radio.initialize(FREQUENCY,NODEID,NETWORKID);
-#ifdef IS_RFM69HW
-  radio.setHighPower(); //uncomment only for RFM69HW!
+#ifdef IS_RFM69HW_HCW
+  radio.setHighPower(); //must include this only for RFM69HW/HCW!
 #endif
-  radio.encrypt(ENCRYPTKEY);
-  //radio.setFrequency(919000000); //set frequency to some custom frequency
 
+#ifdef ENCRYPTKEY
+  radio.encrypt(ENCRYPTKEY);
+#endif
+
+#ifdef FREQUENCY_EXACT
+  radio.setFrequency(FREQUENCY_EXACT); //set frequency to some custom frequency
+#endif
+  
 //Auto Transmission Control - dials down transmit power to save battery (-100 is the noise floor, -90 is still pretty good)
 //For indoor nodes that are pretty static and at pretty stable temperatures (like a MotionMote) -90dBm is quite safe
 //For more variable nodes that can expect to move or experience larger temp drifts a lower margin like -70 to -80 would probably be better
 //Always test your ATC mote in the edge cases in your own environment to ensure ATC will perform as you expect
 #ifdef ENABLE_ATC
-  radio.enableAutoPower(-70);
+  radio.enableAutoPower(ATC_RSSI);
 #endif
 
   char buff[50];
@@ -158,7 +194,7 @@ void loop() {
       radio.sendACK();
       Serial.print(" - ACK sent");
     }
-    Blink(LED,3);
+    Blink(LED_BUILTIN,3);
     Serial.println();
   }
 
@@ -191,6 +227,6 @@ void loop() {
     }
     sendSize = (sendSize + 1) % 31;
     Serial.println();
-    Blink(LED,3);
+    Blink(LED_BUILTIN,3);
   }
 }

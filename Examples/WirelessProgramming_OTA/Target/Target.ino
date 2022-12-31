@@ -6,11 +6,10 @@
 // the FLASH chip, then restart the Moteino so the bootloader can continue the job of
 // actually reflashing the internal flash memory from the external FLASH memory chip flash image
 // The handshake protocol that receives the sketch wirelessly by means of the RFM69 radio
-// is handled by the SPIFLash/WirelessHEX69 library, which also relies on the RFM69 library
+// is handled by the SPIFLash/RFM69_OTA library, which also relies on the RFM69 library
 // These libraries and custom 1k Optiboot bootloader are at: http://github.com/lowpowerlab
 // **********************************************************************************
-// Copyright Felix Rusu, LowPowerLab.com
-// Library and code by Felix Rusu - felix@lowpowerlab.com
+// Copyright Felix Rusu 2020, http://www.LowPowerLab.com/contact
 // **********************************************************************************
 // License
 // **********************************************************************************
@@ -26,69 +25,85 @@
 // PARTICULAR PURPOSE. See the GNU General Public        
 // License for more details.                              
 //                                                        
-// You should have received a copy of the GNU General    
-// Public License along with this program.
-// If not, see <http://www.gnu.org/licenses/>.
-//                                                        
 // Licence can be viewed at                               
 // http://www.gnu.org/licenses/gpl-3.0.txt
 //
 // Please maintain this license information along with authorship
 // and copyright notices in any redistribution of this code
 // **********************************************************************************
-#include <RFM69.h>         //get it here: https://www.github.com/lowpowerlab/rfm69
-#include <SPI.h>
-#include <SPIFlash.h>      //get it here: https://www.github.com/lowpowerlab/spiflash
-#include <avr/wdt.h>
-#include <WirelessHEX69.h> //get it here: https://github.com/LowPowerLab/WirelessProgramming/tree/master/WirelessHEX69
-
-#define NODEID      123       // node ID used for this unit
-#define NETWORKID   250
+#include <RFM69.h>         //get it here: https://github.com/lowpowerlab/RFM69
+#include <RFM69_ATC.h>     //get it here: https://github.com/lowpowerlab/RFM69
+#include <RFM69_OTA.h>     //get it here: https://github.com/lowpowerlab/RFM69
+#include <SPIFlash.h>      //get it here: https://github.com/lowpowerlab/spiflash
+//****************************************************************************************************************
+//**** IMPORTANT RADIO SETTINGS - YOU MUST CHANGE/CONFIGURE TO MATCH YOUR HARDWARE TRANSCEIVER CONFIGURATION! ****
+//****************************************************************************************************************
+#define NODEID       123  // node ID used for this unit
+#define NETWORKID    100
 //Match frequency to the hardware version of the radio on your Moteino (uncomment one):
 //#define FREQUENCY   RF69_433MHZ
 //#define FREQUENCY   RF69_868MHZ
 #define FREQUENCY     RF69_915MHZ
-//#define IS_RFM69HW  //uncomment only for RFM69HW! Leave out if you have RFM69W!
+#define FREQUENCY_EXACT 915000000
+#define ENCRYPTKEY  "sampleEncryptKey" //16-bytes or ""/0/null for no encryption
+#define IS_RFM69HW_HCW  //uncomment only for RFM69HW/HCW! Leave out if you have RFM69W/CW!
+//*****************************************************************************************************************************
+#define ENABLE_ATC    //comment out this line to disable AUTO TRANSMISSION CONTROL
+#define ATC_RSSI      -80
+#define FLASH_ID      0xEF30  //ex. 0xEF30 for windbond 4mbit, 0xEF40 for windbond 16/64mbit
+//*****************************************************************************************************************************
+//#define BR_300KBPS         //run radio at max rate of 300kbps!
+//*****************************************************************************************************************************
 #define SERIAL_BAUD 115200
-#define ACK_TIME    30  // # of ms to wait for an ack
-#define ENCRYPTKEY "sampleEncryptKey" //(16 bytes of your choice - keep the same on all encrypted nodes)
-#define BLINKPERIOD 500
+#define BLINKPERIOD 1000
+//*****************************************************************************************************************************
+SPIFlash flash(SS_FLASHMEM, FLASH_ID);
 
-#ifdef __AVR_ATmega1284P__
-  #define LED           15 // Moteino MEGAs have LEDs on D15
-  #define FLASH_SS      23 // and FLASH SS on D23
+#ifdef ENABLE_ATC
+  RFM69_ATC radio;
 #else
-  #define LED           9 // Moteinos hsave LEDs on D9
-  #define FLASH_SS      8 // and FLASH SS on D8
+  RFM69 radio;
 #endif
 
-RFM69 radio;
 char input = 0;
 long lastPeriod = -1;
 
-/////////////////////////////////////////////////////////////////////////////
-// flash(SPI_CS, MANUFACTURER_ID)
-// SPI_CS          - CS pin attached to SPI flash chip (8 in case of Moteino)
-// MANUFACTURER_ID - OPTIONAL, 0x1F44 for adesto(ex atmel) 4mbit flash
-//                             0xEF30 for windbond 4mbit flash
-//                             0xEF40 for windbond 16/64mbit flash
-/////////////////////////////////////////////////////////////////////////////
-SPIFlash flash(FLASH_SS, 0xEF30); //EF30 for windbond 4mbit flash
-
-void setup(){
-  pinMode(LED, OUTPUT);
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
   Serial.begin(SERIAL_BAUD);
+  delay(1000);
   radio.initialize(FREQUENCY,NODEID,NETWORKID);
   radio.encrypt(ENCRYPTKEY); //OPTIONAL
-#ifdef IS_RFM69HW
-  radio.setHighPower(); //only for RFM69HW!
+
+#ifdef FREQUENCY_EXACT
+  radio.setFrequency(FREQUENCY_EXACT); //set frequency to some custom frequency
 #endif
-  Serial.print("Start node...");
+
+#ifdef ENABLE_ATC
+  radio.enableAutoPower(ATC_RSSI);
+#endif
+
+#ifdef IS_RFM69HW_HCW
+  radio.setHighPower(); //must include this only for RFM69HW/HCW!
+#endif
+  Serial.println("Start node...");
+  Serial.print("Node ID = ");
+  Serial.println(NODEID);
 
   if (flash.initialize())
     Serial.println("SPI Flash Init OK!");
   else
     Serial.println("SPI Flash Init FAIL!");
+
+#ifdef BR_300KBPS
+  radio.writeReg(0x03, 0x00);  //REG_BITRATEMSB: 300kbps (0x006B, see DS p20)
+  radio.writeReg(0x04, 0x6B);  //REG_BITRATELSB: 300kbps (0x006B, see DS p20)
+  radio.writeReg(0x19, 0x40);  //REG_RXBW: 500kHz
+  radio.writeReg(0x1A, 0x80);  //REG_AFCBW: 500kHz
+  radio.writeReg(0x05, 0x13);  //REG_FDEVMSB: 300khz (0x1333)
+  radio.writeReg(0x06, 0x33);  //REG_FDEVLSB: 300khz (0x1333)
+  radio.writeReg(0x29, 240);   //set REG_RSSITHRESH to -120dBm
+#endif
 }
 
 void loop(){
@@ -103,6 +118,18 @@ void loop(){
       int counter = 0;
 
       while(counter<=256){
+        Serial.print(flash.readByte(counter++), HEX);
+        Serial.print('.');
+      }
+      
+      Serial.println();
+    }
+    else if (input == 'D') //d=dump higher memory
+    {
+      Serial.println("Flash content:");
+      uint16_t counter = 4090; //dump the memory between the first 4K and second 4K sectors
+
+      while(counter<=4200){
         Serial.print(flash.readByte(counter++), HEX);
         Serial.print('.');
       }
@@ -151,17 +178,18 @@ void loop(){
     for (byte i = 0; i < radio.DATALEN; i++)
       Serial.print((char)radio.DATA[i], HEX);
     Serial.println();
-    CheckForWirelessHEX(radio, flash, true);
+    CheckForWirelessHEX(radio, flash, false);
     Serial.println();
   }
   //else Serial.print('.');
   
-  ////////////////////////////////////////////////////////////////////////////////////////////
+  //*****************************************************************************************************************************
   // Real sketch code here, let's blink the onboard LED
   if ((int)(millis()/BLINKPERIOD) > lastPeriod)
   {
     lastPeriod++;
-    digitalWrite(LED, lastPeriod%2);
+    digitalWrite(LED_BUILTIN, lastPeriod%2);
+    Serial.print("BLINKPERIOD ");Serial.println(BLINKPERIOD);
   }
-  ////////////////////////////////////////////////////////////////////////////////////////////
+  //*****************************************************************************************************************************
 }
