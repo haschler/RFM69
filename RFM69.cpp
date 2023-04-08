@@ -1101,7 +1101,7 @@ static uint32_t getCoefForResolution(uint8_t resolution, uint32_t duration)
   uint32_t result = duration / resolDuration;
 
   // If the next-higher coefficient is closer, use that
-  if ((long)(abs(duration - ((result + 1) * resolDuration))) < abs((long)(duration - (result * resolDuration))))
+  if (abs((long)(duration - ((result + 1) * resolDuration))) < abs((long)(duration - (result * resolDuration))))
     return result + 1;
 
   return result;
